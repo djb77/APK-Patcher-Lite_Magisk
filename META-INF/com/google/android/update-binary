@@ -4,6 +4,10 @@
 # Magisk Module Template Install Script
 # by topjohnwu
 #
+# APK-Patcher Lite: Recovery Flashable Zip
+# by djb77 @ xda-developers
+# Based on APK-Patcher by osm0sis @ xda-developers
+#
 ##########################################################################################
 
 TMPDIR=/dev/tmp
@@ -30,6 +34,11 @@ require_new_magisk() {
 
 ##########################################################################################
 # Environment
+
+show_progress() { echo "progress $1 $2" > $OUTFD; }
+set_progress() { echo "set_progress $1" > $OUTFD; }
+abort() { ui_print " "; ui_print "$*"; exit 1; }
+
 ##########################################################################################
 
 OUTFD=$2
@@ -88,6 +97,7 @@ print_modname
 # Please leave this message in your flashable zip for credits :)
 ui_print "******************************"
 ui_print "Powered by Magisk (@topjohnwu)"
+ui_print "and APK-Patcher Lite  (@djb77)"
 ui_print "******************************"
 
 ##########################################################################################
@@ -110,6 +120,130 @@ unzip -o "$ZIP" 'system/*' -d $MODPATH >&2
 
 # Remove placeholder
 rm -f $MODPATH/system/placeholder 2>/dev/null
+
+##########################################################################################
+# APK-Patcher Lite Main
+##########################################################################################
+
+magiskdir=$PWD
+
+# working directory variables
+ap=$TMPDIR/apkpatcher
+bin=$ap/tools
+patch=$ap/patch
+script=$ap/script
+
+show_progress 1.34 0
+
+# extract apkpatcher
+mkdir -p $ap
+cd $ap
+ui_print "- Extracting Files for APK-Patcher Lite"
+unzip -o "$ZIP" envvar.sh extracmd.sh 'patch/*' 'script/*' 'tools/*' -d $ap >&2
+
+# set up extracted files and directories
+chmod -R 755 $bin $script $ap/*.sh
+
+# import variables
+. $ap/envvar.sh
+
+ui_print "- Patching Files"
+amount=$((100 / `echo $apklist | wc -w`))
+subamt=$(awk -v num=$amount 'BEGIN { print num / 10}')
+for apkp_target in $apklist; do
+  ui_print " "
+  ui_print "- $apkp_target"
+  apkname=$(basename $apkp_target .apk)
+
+  # copy in apkp_target system file to patch
+  sysfile=`find /system -mindepth 2 -name $apkp_target`
+  cp -fp $sysfile $ap
+  progress=$((progress + subamt))
+  set_progress $(awk -v num=$progress 'BEGIN { print num / 100}')
+
+  # make a backup if set
+  if [ "$backup" == 1 ]; then
+    ui_print "  Backup APK"
+    mkdir -p $apkbak
+    cp -fp $sysfile $apkbak
+  fi
+  progress=$((progress + subamt))
+  set_progress $(awk -v num=$progress 'BEGIN { print num / 100}')
+
+  # file patches
+  if [ -d $patch/$apkname ]; then
+    mv $ap/$apkname.apk $ap/$apkname.zip
+
+  # delete unwanted files
+    if [ -f $script/$apkname.sh ]; then
+      ui_print "  Remove files"
+      . $script/$apkname.sh
+      for remove in $fileremove; do
+        $bin/zip -d $ap/$apkname.zip $remove
+      done
+    fi
+
+  # continue patching
+    ui_print "  Inject files"
+    cd $patch/$apkname
+    $bin/zip -r -9 $ap/$apkname.zip *
+    if [ -f resources.arsc ]; then
+      $bin/zip -r -0 $ap/$apkname.zip resources.arsc
+    fi
+    cd $ap
+    mv $ap/$apkname.zip $ap/$apkname.apk
+  fi
+  progress=$((progress + subamt))
+  set_progress $(awk -v num=$progress 'BEGIN { print num / 100}')
+
+  # zipalign updated file
+  ui_print "  Zipaligning APK"
+  cp -f $apkp_target $apkname-preopt.apk
+  rm $apkp_target
+  $bin/zipalign -p 4 $apkname-preopt.apk $apkp_target
+  progress=$((progress + subamt))
+  set_progress $(awk -v num=$progress 'BEGIN { print num / 100}')
+ 
+  # copy patched file back to system
+  ui_print "  Copy APK to Magisk Module"
+  mkdir -p $MODPATH$sysfile
+  cd $MODPATH$sysfile
+  cd ..
+  rm -rf *
+  magiskcopy=$PWD
+  cd $ap
+  cp -fp $apkp_target $magiskcopy
+  progress=$((progress + subamt))
+  set_progress $(awk -v num=$progress 'BEGIN { print num / 100}')
+
+  # remove temp files if cleanup is set
+  if [ "$cleanup" == 1 ]; then
+    ui_print "  Clean up work area"
+    rm -rf $apkp_target $apkname-preopt.apk
+  fi;
+  progress=$((progress + subamt))
+  set_progress $(awk -v num=$progress 'BEGIN { print num / 100}')
+done;
+
+# extra required non-patch changes
+ui_print " "
+ui_print "- Run extra commands"
+. $ap/extracmd.sh
+set_progress 1.2
+
+# cleanup as necessary
+if [ "$cleanup" == 1 ]; then
+  ui_print "- Cleaning up..."
+  rm -rf $ap 
+fi
+
+ui_print " "
+
+##########################################################################################
+# Back to Magisk
+##########################################################################################
+
+cd $magiskdir
 
 # Handle replace folders
 for TARGET in $REPLACE; do
